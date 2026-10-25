@@ -113,13 +113,13 @@
     let m;
     while ((m = re.exec(html))) if (m[1] === cid && !job.seen.has(m[0])) { job.seen.add(m[0]); job.queue.push(m[0]); }
     const items = extract(rscText(html), job.g.name);
-    if (page === 1 && !items.length && html.indexOf('discountedSellingPrice') < 0) noLoc = true;
+    if (page === 1 && !items.length && !job.queue.length && html.indexOf('discountedSellingPrice') < 0) noLoc = true;
     items.more = job.queue.length > 0;
     return items;
   }
   const P = {
     key: 'zpt_v1', hostRe: /(^|\.)zepto(now)?\.com$/,
-    defaults: { groups: ['z0', 'z2', 'z12'], depth: 3 },
+    defaults: { groups: ['z0', 'z2', 'z12'], depth: 5 },
     workers: 3,
     jobs: st => { const jobs = []; for (const g of GROUPS) if (st.groups.includes(g.id)) jobs.push({ g, name: g.name, url: g.subs[0][0] }); return jobs; },
     fetchPage,
@@ -163,7 +163,8 @@
           const items = await P.fetchPage(job, page, ctl);
           const fresh = ingest(items);
           scheduleRender();
-          if (!fresh || items.more === false) break;
+          // Stop on the last page, or when a page adds nothing and does not promise more.
+          if (items.more === false || (!fresh && items.more !== true)) break;
         }
       } catch (e) { if (!ctl.stop) S.errors++; }
       S.done++; scheduleRender();
