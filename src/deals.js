@@ -47,76 +47,462 @@
     { id: 'z20', name: "Health & Baby Care", subs: [["/cn/health-baby-care/sexual-wellness/cid/46853481-25d4-4126-947b-c6d96f0669f6/scid/95c866f4-0647-4368-9bb4-88ca0ff66ab0", "Health & Baby Care"]] },
     { id: 'z21', name: "Homegrown Brands", subs: [["/cn/homegrown-brands/tea-coffee/cid/2223e3e6-334d-4aa8-8e22-dcf577faa933/scid/353b3339-3f85-416d-b662-9c42685c96ce", "Homegrown Brands"]] }
   ];
-  let noLoc = false;
-  // Next.js pages carry their data as self.__next_f.push([1,"..."]) chunks.
-  function rscText(html) {
-    const out = [], re = /self\.__next_f\.push\((\[[\s\S]*?\])\)<\/script>/g;
-    let m;
-    while ((m = re.exec(html))) { try { const a = JSON.parse(m[1]); if (typeof a[1] === 'string') out.push(a[1]); } catch (e) { /* ignore */ } }
-    return out.join('');
-  }
-  // Every JSON object in the text that has `key`.
-  function objectsWith(text, key) {
-    const res = [], needle = '"' + key + '":';
-    let i = 0;
-    while ((i = text.indexOf(needle, i)) >= 0) {
-      let d = 0, s = i;
-      for (; s >= 0; s--) { const c = text[s]; if (c === '}') d++; else if (c === '{') { if (!d) break; d--; } }
-      let e = s, dd = 0, str = false;
-      for (; e < text.length; e++) {
-        const c = text[e];
-        if (str) { if (c === '\\') { e++; continue; } if (c === '"') str = false; continue; }
-        if (c === '"') str = true; else if (c === '{') dd++; else if (c === '}') { if (!--dd) break; }
+// ── v2 Zepto fetch+parse ──
+// Nov 2026 working shape, rewritten for PriceDrop Hunter (MIT-licensed reference
+// implementation adapted; original MIT notice kept in LICENSE). Two paths, in order:
+//  1. BFF gateway (POST bff-gateway.zepto.com/lms/api/v2/get_page + user-search
+//     /api/v3/search) with signed headers. The 401 fix: send `x-without-bearer:
+//     true` when no Authorization header is present, and sign with the XSRF
+//     token as the secret (SHA-256 over sorted body|deviceId|method|requestId|
+//     secret|url; x-timezone = SHA-256 of the signature).
+//  2. Next.js RSC fallback (same-origin /search and category pages, `rsc: 1`
+//     header, NEXT_REDIRECT followed) — needs no auth at all.
+// Session headers + delivery location are captured from the tab's own BFF
+// traffic (fetch/XHR patch) or read from cookies/localStorage; nothing is
+// invented. Category/sub-category lists are discovered live from
+// /pip/all-categories/9277 and each category page's tab bar, cached 7 days.
+const ZEPTO_BFF = 'https://bff-gateway.zepto.com';
+const ALL_CATEGORIES_LAYOUT_ID = '9277';
+const BLOCKBUSTER = { name: 'Blockbuster Deals', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'f09d83f6-d14b-4402-a12a-a01c7c8738d0', slug: 'blockbuster-deals', isSpecial: true };
+const BLOCKBUSTER_SUBS = [
+  { title: 'Top Picks', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'f09d83f6-d14b-4402-a12a-a01c7c8738d0' },
+  { title: 'Bath & Body', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: '7441e990-4677-4c6d-82f8-3e82742575c8' },
+  { title: 'Fragrances', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: '60d9be7b-d961-471f-a6ce-17f1d4e127c0' },
+  { title: 'Tea, Coffee & More', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: '95a554df-77a5-40b7-b7ba-1a564f4426e9' },
+  { title: 'Skincare', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: '3d9d232a-5ac2-4397-bd88-4083027fea9b' },
+  { title: 'Breakfast & Sauces', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'd77c4527-dc33-4026-b729-920cdd7cd2c6' },
+  { title: 'Protein & Nutrition', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'b8c3314a-3285-4cab-a06a-14dbe7b987fd' },
+  { title: 'Dairy, Bread & Eggs', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'a7b876e1-deec-457e-ba19-0b1902c9f2ce' },
+  { title: 'Biscuits', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: '0333efaf-3c19-4683-a022-0439c827013e' },
+  { title: 'Cleaning Essentials', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'bf07d520-c29c-4033-9bf6-2cd35656a63b' },
+  { title: 'Masala, Dry Fruits & More', categoryId: '19c50c75-5341-4617-8519-686ecb46bba6', subCategoryId: 'c06f9bcd-fade-465b-a0b9-ec06e367a948' }
+];
+// Staples sub-categories the bot watches (bot-v2/config.json): discovered live
+// from the Atta, Rice, Oil & Dals tab bar by title; the parent page is the fallback.
+const STAPLE_SUBS = ['Atta', 'Oil', 'Ghee', 'Dals', 'Rice'];
+let noLoc = false;
+let zCapturedHeaders = null, zCapturedLoc = null, zSessionReady = false;
+const zUuid = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
+async function zSha256(str) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)); return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join(''); }
+function zCookie(name) { try { const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&') + '=([^;]*)')); return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; } }
+function zEnvHeaders() {
+  const xsrf = zCookie('XSRF-TOKEN'), csrf = zCookie('csrfSecret'), storeId = zCookie('store_id');
+  const sessionId = zCookie('session_id') || zUuid(), deviceId = zCookie('unique_browser_id') || zUuid();
+  const h = { accept: 'application/json, text/plain, */*', app_sub_platform: 'WEB', app_version: '17.6.0', appversion: '17.6.0', auth_from_cookie: 'true', auth_revamp_flow: 'v2', marketplace_type: 'SUPER_SAVER', platform: 'WEB', source: 'DIRECT', tenant: 'ZEPTO', device_id: deviceId, deviceid: deviceId, session_id: sessionId, sessionid: sessionId, 'x-without-bearer': 'true' };
+  if (storeId) { h.store_id = storeId; h.storeid = storeId; h.store_ids = storeId; }
+  if (xsrf) h['x-xsrf-token'] = xsrf;
+  if (csrf) h['x-csrf-secret'] = csrf;
+  return h;
+}
+async function zSignedHeaders(method, urlPath, bodyStr) {
+  const base = zCapturedHeaders || zEnvHeaders();
+  const reqId = zUuid();
+  const deviceId = base.device_id || base.deviceid || zCookie('unique_browser_id') || zUuid();
+  const xsrf = base['x-xsrf-token'] || zCookie('XSRF-TOKEN') || '';
+  const csrf = base['x-csrf-secret'] || zCookie('csrfSecret') || '';
+  const params = { body: typeof bodyStr === 'string' ? bodyStr : (bodyStr ? JSON.stringify(bodyStr) : ''), deviceId, method: method.toLowerCase(), requestId: reqId, secret: xsrf, url: urlPath };
+  const sig = await zSha256(Object.keys(params).sort().map(k => params[k]).join('|'));
+  const h = Object.assign({}, base, { 'content-type': 'application/json', accept: 'application/json, text/plain, */*', app_version: base.app_version || '17.6.0', appversion: base.appversion || '17.6.0', device_id: deviceId, deviceid: deviceId, 'x-xsrf-token': xsrf, 'x-csrf-secret': csrf, 'request-signature': sig, 'x-timezone': await zSha256(sig), request_id: reqId, requestid: reqId, requestId: reqId });
+  if (!h.authorization && !h.Authorization) h['x-without-bearer'] = 'true';
+  return h;
+}
+function zLocFromEnv() {
+  if (zCapturedLoc) return;
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && /location|address|user_loc|geo/i.test(k)) { try { const v = JSON.parse(localStorage.getItem(k)); const lat = v && (v.latitude || v.lat || (v.coords && v.coords.latitude) || (v.location && v.location.latitude)); const lon = v && (v.longitude || v.lon || v.lng || (v.coords && v.coords.longitude) || (v.location && v.location.longitude)); if (lat && lon) { zCapturedLoc = { latitude: +lat, longitude: +lon }; return; } } catch (e) { /* ignore */ } } } } catch (e) { /* ignore */ }
+  try { const la = document.cookie.match(/(?:^|;\s*)(?:user_lat|latitude|lat)=([^;]+)/), lo = document.cookie.match(/(?:^|;\s*)(?:user_lon|longitude|lng|lon)=([^;]+)/); if (la && lo && !isNaN(+la[1]) && !isNaN(+lo[1])) zCapturedLoc = { latitude: +la[1], longitude: +lo[1] }; } catch (e) { /* ignore */ }
+}
+// Capture signed headers + lat/lng from the page's own BFF traffic, so the bot
+// and the bookmarklet reuse the session the tab already has. A short hop to
+// /search and back makes the page issue a signed BFF request to capture.
+function zInstallOmniCatcher() {
+  zLocFromEnv();
+  if (window.__ZPT_omni) return; window.__ZPT_omni = true;
+  const grab = (url, headers, body) => {
+    try {
+      if (String(url).includes('bff-gateway.zepto.com') && (headers['request-signature'] || headers['x-csrf-secret'] || headers['x-xsrf-token'])) {
+        zCapturedHeaders = Object.assign({}, zCapturedHeaders || {}, headers);
+        try { const p = typeof body === 'string' ? JSON.parse(body) : null; if (p && p.latitude && p.longitude) zCapturedLoc = { latitude: +p.latitude, longitude: +p.longitude }; } catch (e) { /* ignore */ }
       }
-      try { res.push(JSON.parse(text.slice(s, e + 1))); } catch (err) { /* ignore */ }
-      i = e + 1;
+    } catch (e) { /* ignore */ }
+  };
+  const norm = h => { const o = {}; if (!h) return o; if (h instanceof Headers) h.forEach((v, k) => { o[k.toLowerCase()] = v; }); else if (Array.isArray(h)) h.forEach(([k, v]) => { o[String(k).toLowerCase()] = v; }); else Object.keys(h).forEach(k => { o[k.toLowerCase()] = h[k]; }); return o; };
+  const of = window.fetch;
+  window.fetch = function (input, init) {
+    try { const url = typeof input === 'string' ? input : (input && input.url) || ''; grab(url, Object.assign(norm(input instanceof Request ? input.headers : null), norm(init && init.headers)), init && init.body); } catch (e) { /* ignore */ }
+    return of.apply(this, arguments);
+  };
+  try {
+    const oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.setRequestHeader, oe = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (m, u) { this._zUrl = u; this._zH = {}; return oo.apply(this, arguments); };
+    XMLHttpRequest.prototype.setRequestHeader = function (n, v) { this._zH[n.toLowerCase()] = v; return os.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function (b) { grab(this._zUrl || '', this._zH || {}, b); return oe.apply(this, arguments); };
+  } catch (e) { /* ignore */ }
+}
+async function zEnsureSession() {
+  if (zSessionReady) return true;
+  zLocFromEnv(); if (zCapturedHeaders) { zSessionReady = true; return true; }
+  zInstallOmniCatcher();
+  try {
+    const onSearch = location.pathname.includes('/search');
+    const go = sel => { const a = document.querySelector(sel); if (a) a.click(); else { history.pushState(null, '', sel === 'a[href^="/search"]' ? '/search' : '/'); dispatchEvent(new Event('popstate')); } };
+    if (!onSearch) go('a[href^="/search"]'); else { go('a[href="/"]'); setTimeout(() => go('a[href^="/search"]'), 300); }
+  } catch (e) { /* ignore */ }
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5000) { if (zCapturedHeaders || (zCookie('store_id') && zCookie('XSRF-TOKEN'))) break; await sleep(100); }
+  zSessionReady = !!(zCapturedHeaders || zCookie('XSRF-TOKEN') || zCookie('store_id'));
+  await sleep(600);
+  return zSessionReady;
+}
+// Next.js pages carry their data as self.__next_f.push([1,"..."]) chunks.
+function rscText(html) {
+  const out = [], re = /self\.__next_f\.push\((\[[\s\S]*?\])\)<\/script>/g;
+  let m;
+  while ((m = re.exec(html))) { try { const a = JSON.parse(m[1]); if (typeof a[1] === 'string') out.push(a[1]); } catch (e) { /* ignore */ } }
+  return out.join('');
+}
+// Every JSON object in the text that has `key`.
+function objectsWith(text, key) {
+  const res = [], needle = '"' + key + '":';
+  let i = 0;
+  while ((i = text.indexOf(needle, i)) >= 0) {
+    let d = 0, s = i;
+    for (; s >= 0; s--) { const c = text[s]; if (c === '}') d++; else if (c === '{') { if (!d) break; d--; } }
+    let e = s, dd = 0, str = false;
+    for (; e < text.length; e++) {
+      const c = text[e];
+      if (str) { if (c === '\\') { e++; continue; } if (c === '"') str = false; continue; }
+      if (c === '"') str = true; else if (c === '{') dd++; else if (c === '}') { if (!--dd) break; }
     }
-    return res;
+    try { res.push(JSON.parse(text.slice(s, e + 1))); } catch (err) { /* ignore */ }
+    i = e + 1;
   }
-  const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  function extract(text, cat) {
-    const out = [], seen = new Set();
-    for (const it of objectsWith(text, 'discountedSellingPrice')) {
-      const p = it.product, v = it.productVariant || {};
-      if (!p || !p.name) continue;
-      const sell = (it.discountedSellingPrice != null ? it.discountedSellingPrice : it.sellingPrice) / 100;
-      let mrp = (it.mrp != null ? it.mrp : v.mrp) / 100;
-      if (!sell) continue;
-      if (!(mrp >= sell)) mrp = sell;
-      const id = String(it.id || v.id || p.id);
-      if (seen.has(id)) continue; seen.add(id);
-      const img = v.images && v.images[0] && v.images[0].path;
-      out.push({ id, title: p.name + (v.formattedPacksize ? ' · ' + v.formattedPacksize : ''), brand: String(p.brand || guessBrand(p.name)), price: sell, mrp,
-        disc: mrp > sell ? Math.round((mrp - sell) / mrp * 100) : 0, save: mrp - sell,
-        img: img ? 'https://cdn.zeptonow.com/production/tr:w-300,ar-1-1,pr-true,f-auto,q-60/' + img : '',
-        url: v.id ? 'https://www.zepto.com/pn/' + slugify(p.name) + '/pvid/' + v.id : '',
-        inStock: !(it.outOfStock === true || it.availableQuantity === 0),
-        cat: cat + (it.primarySubcategoryName ? ' › ' + it.primarySubcategoryName : '') });
-    }
-    return out;
+  return res;
+}
+// Balanced JSON object starting at `start` (string-aware brace counting).
+function zBalancedObjectAt(text, start) {
+  if (text[start] !== '{') return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true; else if (ch === '{') depth++; else if (ch === '}') { if (!--depth) return text.slice(start, i + 1); }
   }
-  async function fetchPage(job, page, ctl) {
-    if (page === 1) { job.queue = []; job.seen = new Set([job.url]); }
-    const url = page === 1 ? job.url : job.queue.shift();
-    if (!url || ctl.stop) return Object.assign([], { more: false });
-    await sleep(250 + Math.random() * 350);
-    let r;
-    for (let a = 0; a < 3; a++) {
-      r = await W.fetch(url, { credentials: 'include', headers: { accept: 'text/html' } });
-      if (r.status !== 429 && r.status < 500) break;
-      await sleep(2000 * (a + 1));
+  return null;
+}
+function zJsonObjects(text, marker) {
+  const out = []; let from = 0;
+  for (;;) { const s = text.indexOf(marker, from); if (s < 0) break; const slice = zBalancedObjectAt(text, s); if (slice) { try { out.push(JSON.parse(slice)); } catch (e) { /* ignore */ } from = s + slice.length; } else from = s + marker.length; }
+  return out;
+}
+const slugify = s => String(s || '').toLowerCase().replace(/&/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+function zeptoImageUrl(p) {
+  if (!p) return '';
+  if (/^https?:/.test(p)) return p;
+  const c = p.replace(/^\/+/, '');
+  if (c.startsWith('production/')) return 'https://cdn.zeptonow.com/' + c;
+  if (c.startsWith('cms/')) return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/' + c;
+  if (!c.includes('/')) return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/cms/product_variant/' + c;
+  return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/' + c;
+}
+// One normaliser for both paths. Returns a Hunter-shaped product or null.
+// Prices arrive in paise; discount is read from the payload when present,
+// otherwise computed from MRP vs selling price. Never drops a product for a
+// missing image or brand — those render as an empty image / guessed brand.
+function normalizeZeptoProduct(it, cat) {
+  const p = it.product || (it.productResponse && it.productResponse.product) || (it.item && it.item.product) || it;
+  const v = it.productVariant || (it.productResponse && it.productResponse.productVariant) || (it.item && it.item.productVariant) || it;
+  if (!p || !p.name) return null;
+  const sell = ((it.discountedSellingPrice != null ? it.discountedSellingPrice : it.sellingPrice) ?? (v.discountedSellingPrice != null ? v.discountedSellingPrice : v.sellingPrice) ?? 0) / 100;
+  let mrp = ((it.mrp != null ? it.mrp : v.mrp) ?? 0) / 100;
+  if (!sell) return null;
+  if (!(mrp >= sell)) mrp = sell;
+  const oos = it.outOfStock === true || v.outOfStock === true || it.isOutOfStock === true || (v.inventory && v.inventory.quantity <= 0) || it.availableQuantity === 0 || v.quantity === 0 || v.isActive === false || it.isActive === false;
+  let disc = it.discountPercent != null ? it.discountPercent : v.discountPercent;
+  if (disc == null || isNaN(disc)) disc = mrp > sell ? Math.round((mrp - sell) / mrp * 100) : 0;
+  const imgPath = (v.images && v.images[0] && (v.images[0].path || v.images[0].name)) || (p.images && p.images[0] && (p.images[0].path || p.images[0].name)) || (it.images && it.images[0] && (it.images[0].path || it.images[0].url)) || (typeof it.image === 'string' ? it.image : (it.image && (it.image.path || it.image.url))) || '';
+  const slug = (p.slug || slugify(p.name));
+  return { id: String(it.id || v.id || p.id), title: p.name + (v.formattedPacksize ? ' · ' + v.formattedPacksize : ''), brand: String(p.brand || guessBrand(p.name)), price: sell, mrp, disc, save: mrp - sell, img: zeptoImageUrl(imgPath), url: v.id ? 'https://www.zepto.com/pn/' + slug + '/pvid/' + v.id : 'https://www.zepto.com/pn/' + slug, inStock: !oos, cat: cat + (it.primarySubcategoryName ? ' › ' + it.primarySubcategoryName : '') };
+}
+// Recursive widget parser: BFF pageLayout widgets can nest (widgets inside
+// data.widgets) and carry items under data.items / data.products / items.
+function extractWidgets(widgets, cat, sub, requireDiscount) {
+  const out = [], seen = new Set();
+  const label = cat + (sub ? ' › ' + sub : '');
+  (function traverse(list) {
+    if (!Array.isArray(list)) return;
+    for (const w of list) {
+      if (!w) continue;
+      const items = (w.data && Array.isArray(w.data.items)) ? w.data.items : (w.data && Array.isArray(w.data.products)) ? w.data.products : Array.isArray(w.items) ? w.items : Array.isArray(w.products) ? w.products : [];
+      for (const it of items) {
+        const n = normalizeZeptoProduct(it, label);
+        if (!n) continue;
+        if (seen.has(n.id)) continue; seen.add(n.id);
+        if (requireDiscount && !(n.disc > 0)) continue;
+        out.push(n);
+      }
+      if (w.widgets) traverse(w.widgets);
+      if (w.data && w.data.widgets) traverse(w.data.widgets);
     }
-    if (!r.ok) return Object.assign([], { more: job.queue.length > 0 });
-    const html = await r.text();
-    const cid = (job.url.match(/\/cid\/([0-9a-f-]{36})/) || [])[1];
+  })(widgets);
+  return out;
+}
+// RSC/HTML path: same normaliser, fed by the page's embedded product objects.
+function extractRscProducts(text, cat) {
+  const out = [], seen = new Set();
+  const push = it => { const n = normalizeZeptoProduct(it, cat); if (n && !seen.has(n.id)) { seen.add(n.id); out.push(n); } };
+  for (const it of objectsWith(text, 'discountedSellingPrice')) push(it);
+  for (const pl of zJsonObjects(text, '{"pageLayout"')) if (pl.pageLayout && Array.isArray(pl.pageLayout.widgets)) for (const n of extractWidgets(pl.pageLayout.widgets, cat, '', false)) if (!seen.has(n.id)) { seen.add(n.id); out.push(n); }
+  for (const d of zJsonObjects(text, '{"productResponse"')) push(d);
+  for (const d of zJsonObjects(text, '{"productVariant"')) push(d);
+  return out;
+}
+async function fetchZeptoPage(path, attempt) {
+  attempt = attempt || 1;
+  const url = 'https://www.zepto.com' + path;
+  let r = await W.fetch(url, { credentials: 'include', headers: { accept: '*/*', rsc: '1' } });
+  let text = await r.text();
+  const redir = text.match(/NEXT_REDIRECT;(?:replace|push);([^;]+);/);
+  if (redir && attempt < 3) return fetchZeptoPage(redir[1], attempt + 1);
+  if (!r.ok || text.length < 200) { r = await W.fetch(url, { credentials: 'include' }); text = await r.text(); }
+  if (!r.ok) throw new Error('fetch failed: ' + r.status);
+  return text;
+}
+function zCacheGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function zCacheSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+const zFresh = (at, ttl) => at && (Date.now() - at < ttl);
+async function getZeptoCategories(force) {
+  const KEY = 'zpt:cats', TTL = 7 * 864e5;
+  if (!force) { const c = zCacheGet(KEY); if (c && zFresh(c.cachedAt, TTL) && c.categories && c.categories.length) return c.categories; }
+  try {
+    const text = await fetchZeptoPage('/pip/all-categories/' + ALL_CATEGORIES_LAYOUT_ID);
+    const cats = [];
+    for (const t of zJsonObjects(text, '{"deeplinkUrl"')) { const m = /Categories\?categoryId=([0-9a-f-]{36})&subCategoryId=([0-9a-f-]{36})/.exec(t.deeplinkUrl || ''); if (m) cats.push({ name: t.name, categoryId: m[1], subCategoryId: m[2] }); }
+    if (cats.length) { zCacheSet(KEY, { categories: cats, cachedAt: Date.now() }); return [BLOCKBUSTER].concat(cats.filter(c => c.categoryId !== BLOCKBUSTER.categoryId && (c.name || '').toLowerCase() !== 'blockbuster deals')); }
+  } catch (e) { /* fall through to seeded list */ }
+  return [BLOCKBUSTER].concat(GROUPS.map(g => { const m = (g.subs[0][0].match(/\/cid\/([0-9a-f-]{36})\/scid\/([0-9a-f-]{36})/) || []); return { name: g.name, categoryId: m[1] || '', subCategoryId: m[2] || '' }; }).filter(c => c.categoryId));
+}
+async function getZeptoSubcategories(cat, force) {
+  const KEY = 'zpt:subs:' + cat.categoryId, TTL = cat.isSpecial ? 36e5 : 7 * 864e5;
+  if (!force) { const c = zCacheGet(KEY); if (c && zFresh(c.cachedAt, TTL) && c.tabs && c.tabs.length) return c.tabs; }
+  if (cat.isSpecial) {
+    try {
+      const text = await fetchZeptoPage('/cn/blockbuster-deals/top-picks/cid/' + cat.categoryId + '/scid/' + cat.subCategoryId);
+      const tabs = zJsonObjects(text, '{"activeIcon"').map(t => t.params ? { title: t.title, categoryId: t.params.category_id, subCategoryId: t.params.subcategory_id } : null).filter(Boolean);
+      if (tabs.length) { zCacheSet(KEY, { tabs, cachedAt: Date.now() }); return tabs; }
+    } catch (e) { /* use seeded list */ }
+    return BLOCKBUSTER_SUBS;
+  }
+  try {
+    const text = await fetchZeptoPage('/cn/' + slugify(cat.name) + '/all/cid/' + cat.categoryId + '/scid/' + cat.subCategoryId);
+    const tabs = zJsonObjects(text, '{"activeIcon"').map(t => t.params ? { title: t.title, categoryId: t.params.category_id, subCategoryId: t.params.subcategory_id } : null).filter(Boolean);
+    if (tabs.length) { zCacheSet(KEY, { tabs, cachedAt: Date.now() }); return tabs; }
+  } catch (e) { /* fall through */ }
+  return [{ title: cat.name, categoryId: cat.categoryId, subCategoryId: cat.subCategoryId }];
+}
+async function fetchBffPage(body) {
+  const path = '/lms/api/v2/get_page', bodyStr = JSON.stringify(body);
+  const r = await W.fetch(ZEPTO_BFF + path, { method: 'POST', headers: await zSignedHeaders('POST', path, bodyStr), credentials: 'include', mode: 'cors', body: bodyStr });
+  if (!r.ok) throw new Error('BFF HTTP ' + r.status);
+  return r.json();
+}
+// BFF category page, paginated via nextPageParams until endOfPage (max 20).
+async function getDealsBff(cat, sub) {
+  zLocFromEnv();
+  let body = { page_type: 'SUBCATEGORY', version: 'v2', latitude: (zCapturedLoc && zCapturedLoc.latitude) || 12.9716, longitude: (zCapturedLoc && zCapturedLoc.longitude) || 77.5946, category_id: cat.categoryId, subcategory_id: sub.subCategoryId, page_size: 20, page_identifier: 'browse_category_product', filter_id: '0', subcategory_intent_id: '0', ads_end_range: 0, ads_start_range: 0, atlas_offset: 0, disable_tabs: true, eta_raining: false, infinite_feed_widget_id: 0, is_continuous_feed: true, last_widget_id: 0, oos_end_range: 0, oos_start_range: 0, page_number: 1 };
+  const out = [];
+  for (let page = 1; page <= 20; page++) {
+    if (page > 1) await sleep(500 + Math.random() * 700);
+    let data;
+    try { data = await fetchBffPage(body); } catch (e) { zLastBffError = String(e && e.message || e); break; }
+    const widgets = (data.pageLayout && data.pageLayout.widgets) || [];
+    out.push(...extractWidgets(widgets, cat.name, sub.title, true));
+    const end = data.pageLayout && data.pageLayout.endOfPage, next = data.pageLayout && data.pageLayout.nextPageParams;
+    if (end || !next) break;
+    body = Object.assign({}, body, next);
+  }
+  return out;
+}
+async function searchBff(query, pageNumber) {
+  const path = '/user-search-service/api/v3/search';
+  const sessionId = (zCapturedHeaders && (zCapturedHeaders.session_id || zCapturedHeaders.sessionid)) || zCookie('session_id') || zUuid();
+  const body = { query, pageNumber, intentId: zUuid(), mode: 'AUTOSUGGEST', userSessionId: sessionId };
+  const bodyStr = JSON.stringify(body);
+  const r = await W.fetch(ZEPTO_BFF + path, { method: 'POST', headers: await zSignedHeaders('POST', path, bodyStr), credentials: 'include', mode: 'cors', body: bodyStr });
+  if (!r.ok) throw new Error('Search HTTP ' + r.status);
+  return r.json();
+}
+async function searchRsc(query) {
+  const text = await fetchZeptoPage('/search?query=' + encodeURIComponent(query));
+  return extractRscProducts(rscText(text), 'Search › "' + query + '"');
+}
+// Live search (one phrase): BFF first (up to 4 pages), RSC fallback when BFF fails or is empty.
+async function searchZeptoOne(query) {
+  query = String(query || '').trim(); if (!query) return [];
+  const out = [], seen = new Set();
+  const push = list => { for (const p of list) if (!seen.has(p.id)) { seen.add(p.id); out.push(p); } };
+  const hasBff = !!(zCapturedHeaders || zCookie('XSRF-TOKEN') || zCookie('store_id'));
+  if (hasBff) {
+    for (let page = 0; page < 4; page++) {
+      if (page > 0) await sleep(400 + Math.random() * 500);
+      let data;
+      try { data = await searchBff(query, page); } catch (e) { break; }
+      if (!data) break;
+      const widgets = (data.pageLayout && data.pageLayout.widgets) || (data.layout && data.layout.widgets) || (data.data && data.data.widgets) || data.widgets || [];
+      const direct = (data.data && Array.isArray(data.data.items)) ? data.data.items : Array.isArray(data.items) ? data.items : (data.data && Array.isArray(data.data.products)) ? data.data.products : [];
+      if (direct.length) widgets.push({ data: { items: direct } });
+      const got = extractWidgets(widgets, 'Search', '"' + query + '"', false);
+      if (!got.length && !widgets.length) break;
+      push(got);
+      if (data.endOfPage || (data.data && data.data.endOfPage) || (data.pageLayout && data.pageLayout.endOfPage) || got.length < 4) break;
+    }
+  }
+  if (!out.length) { try { push(await searchRsc(query)); } catch (e) { /* ignore */ } }
+  return out.sort((a, b) => b.disc - a.disc || b.save - a.save);
+}
+// Multi-keyword live search: try the phrase first; if it returns almost
+// nothing, search each word separately and merge (dedupe keeps best discount).
+async function searchZepto(query) {
+  query = String(query || '').trim(); if (!query) return [];
+  const phrase = await searchZeptoOne(query);
+  const words = query.split(/\s+/).filter(w => w.length > 1);
+  if (phrase.length >= 5 || words.length < 2) return phrase;
+  const extra = [];
+  for (const w of words) { try { extra.push(await searchZeptoOne(w)); } catch (e) { /* ignore */ } }
+  return mergeSearchResults([phrase].concat(extra));
+}
+// ── Sorter mode (on-page) ──
+// Sorts the product cards already rendered on zepto.com itself — by discount
+// (% OFF label first, else MRP vs price) or by price — without reloading the
+// page. Own implementation: reads the label, reorders the grid in one
+// DocumentFragment batch, hides images while sorting so long lists stay fast.
+// PC and mobile use the same routine; src/sorter.js is the standalone version.
+let zSorterMode = null;
+function zReadCard(el) {
+  const tx = (el.innerHTML || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+  if (/BANNER|NOTIFY|OUT OF STOCK/.test(tx)) return null;
+  if (!tx.includes('₹')) return null;
+  const nums = [];
+  for (const m of tx.matchAll(/₹\s*([\d,.]+)/g)) { const v = parseFloat(m[1].replace(/[^\d.]/g, '')); const ctx = m.input.substring(m.index, m.index + 20).toUpperCase(); if (v > 5 && v < 30000 && !/MONTH|EMI/.test(ctx)) nums.push(v); }
+  if (!nums.length) return null;
+  let d = 0; const p = Math.min(...nums.slice(0, 2));
+  const pct = tx.match(/(\d+)\s*%\s*OFF/), sv = tx.match(/SAVE\s*₹\s*([\d,.]+)/);
+  if (pct) d = +pct[1];
+  else if (sv && p !== 999999) { const s = parseFloat(sv[1].replace(/[^\d.]/g, '')); d = (s / (p + s)) * 100; }
+  else if (nums.length >= 2) { const mrp = Math.max(nums[0], nums[1]), sp = Math.min(nums[0], nums[1]); if (mrp > sp && mrp <= sp * 10) d = ((mrp - sp) / mrp) * 100; }
+  return { el, d, p };
+}
+async function sortPageProducts(mode) {
+  if (mode) zSorterMode = mode; else zSorterMode = zSorterMode === 'disc' ? 'price' : 'disc';
+  const links = Array.from(document.querySelectorAll('a')).filter(e => (e.textContent || '').includes('₹'));
+  if (!links.length) { toast('Sorter: no products on this page yet — scroll or open a category first'); return 0; }
+  const votes = new Map();
+  links.forEach(l => { let p = l.parentElement; for (let i = 0; i < 4 && p; i++) { votes.set(p, (votes.get(p) || 0) + 1); p = p.parentElement; } });
+  const grid = [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const items = Array.from(grid.querySelectorAll('a')).map(zReadCard).filter(Boolean);
+  if (!items.length) { toast('Sorter: no priced products found in the grid'); return 0; }
+  items.sort((a, b) => zSorterMode === 'disc' ? b.d - a.d : a.p - b.p);
+  const turbo = document.createElement('style'); turbo.id = 'zpt-turbo'; turbo.textContent = 'img{visibility:hidden!important}*{transition:none!important;animation:none!important}';
+  document.head.appendChild(turbo);
+  items.forEach(x => { const old = x.el.querySelector('.zpt-tag'); if (old) old.remove(); if (x.d > 0) { const t = document.createElement('div'); t.className = 'zpt-tag'; t.textContent = Math.round(x.d) + '% OFF'; t.style.cssText = 'position:absolute;top:10px;left:10px;background:#720e9e;color:#fff;font-weight:700;font-size:13px;padding:4px 6px;text-align:center;border-radius:4px;z-index:10'; x.el.style.position = 'relative'; x.el.appendChild(t); } x.el.setAttribute('target', '_blank'); x.el.setAttribute('rel', 'noopener noreferrer'); });
+  const frag = document.createDocumentFragment();
+  items.forEach(x => frag.appendChild(x.el));
+  grid.innerHTML = ''; grid.appendChild(frag);
+  turbo.remove();
+  toast('Sorter: ' + items.length + ' products sorted by ' + (zSorterMode === 'disc' ? 'highest discount' : 'lowest price') + ' — tap again to switch');
+  return items.length;
+}
+// ── v2 diagnostics + self-test ──
+// Why 0 results? The last fetch failure is remembered here so the empty
+// state can say the reason instead of showing a blank page.
+let zDiag = { reason: '', detail: '' };
+let zLastBffError = '';
+function diagnoseEmpty(o) {
+  o = o || {};
+  if (o.rateLimited || o.status === 429) return 'rate-limited';
+  if (o.status === 401 || o.status === 403) return 'logged-out';
+  if (o.hasLocation === false) return 'no-location';
+  if (!o.items) return 'category-empty';
+  return 'ok';
+}
+function diagMessage(reason) {
+  return {
+    'logged-out': { title: 'Zepto session expired', hint: 'Reload zepto.com (log in again if asked), then scan again. The BFF calls returned 401.' },
+    'rate-limited': { title: 'Zepto rate-limited this tab', hint: 'Wait a minute or two, then scan again. Fewer categories per scan also helps.' },
+    'no-location': { title: 'No delivery location set', hint: 'Choose your delivery location on zepto.com first — Zepto shows no products without one.' },
+    'category-empty': { title: 'No deals in these categories', hint: 'Try more categories, or lower the minimum discount in the menu.' },
+    '': { title: 'No deals found', hint: 'Try more categories, or lower the minimum discount in the menu.' }
+  }[reason] || { title: 'No deals found', hint: 'Try more categories, or lower the minimum discount in the menu.' };
+}
+// In-browser self-test: runs the real parsers on tiny embedded fixtures and
+// reports PASS/FAIL. Same checks as node test-results-tab.js, runnable from
+// the sidebar without leaving the page.
+function runSelfTest() {
+  const bffFixture = { pageLayout: { widgets: [{ data: { items: [
+    { id: 't-1', product: { id: 'tp-1', name: 'Test Atta', brand: 'Test' }, productVariant: { id: 't-1', formattedPacksize: '1 kg', images: [{ path: 'cms/product_variant/t-1.jpg' }] }, discountedSellingPrice: 4000, mrp: 5000, discountPercent: 20 },
+    { id: 't-2', product: { id: 'tp-2', name: 'Test Oil', brand: 'Test' }, productVariant: { id: 't-2', formattedPacksize: '1 L', images: [{ path: 'cms/product_variant/t-2.jpg' }] }, discountedSellingPrice: 9000, mrp: 10000 },
+    { id: 't-3', product: { id: 'tp-3', name: 'Test Sugar', brand: 'Test' }, productVariant: { id: 't-3', formattedPacksize: '1 kg', images: [] }, discountedSellingPrice: 5000, mrp: 5000, discountPercent: 0 }
+  ] } }] } };
+  const bff = extractWidgets(bffFixture.pageLayout.widgets, 'Test', 'Atta', true).length;
+  const inner = JSON.stringify({ id: 't-4', product: { id: 'tp-4', name: 'Test Rice', brand: 'Test' }, productVariant: { id: 't-4', formattedPacksize: '1 kg', images: [{ path: 'cms/product_variant/t-4.jpg' }] }, discountedSellingPrice: 7000, mrp: 10000 });
+  const rscHtml = '<script>self.__next_f.push([1,' + JSON.stringify(inner) + '])</script>';
+  const rsc = extractRscProducts(rscText(rscHtml), 'Test').length;
+  const sc = zReadCard({ innerHTML: '<div><span>₹499</span><s>₹999</s><span>50% OFF</span></div>' });
+  const sorter = !!(sc && sc.d === 50 && sc.p === 499);
+  const pass = bff === 2 && rsc === 1 && sorter;
+  return { bff, rsc, sorter, pass };
+}
+// JSON export of the currently filtered deals (CSV already exists in the UI).
+function toJsonExport(items) {
+  return JSON.stringify(items.map(p => ({ id: p.id, title: p.title, brand: p.brand, category: p.cat, price: p.price, mrp: p.mrp, discountPct: p.disc, saving: +p.save.toFixed(2), inStock: p.inStock, url: p.url, image: p.img })), null, 2);
+}
+// Merge live-search results across keywords: one entry per product, best discount wins.
+function mergeSearchResults(lists) {
+  const byId = new Map();
+  for (const list of lists) for (const p of list || []) { const old = byId.get(p.id); if (!old || p.disc > old.disc || (p.disc === old.disc && p.price < old.price)) byId.set(p.id, p); }
+  return [...byId.values()].sort((a, b) => b.disc - a.disc || b.save - a.save);
+}
+// ── end v2 diagnostics + self-test ──
+async function fetchPage(job, page, ctl) {
+  if (page === 1) { job.queue = []; job.seen = new Set([job.url]); job.bffBody = null; job.bffDone = false; job.bffTried = false; }
+  if (ctl.stop) return Object.assign([], { more: false });
+  const m = (job.url.match(/\/cid\/([0-9a-f-]{36})\/scid\/([0-9a-f-]{36})/) || []);
+  const cid = m[1], scid = m[2];
+  // Page 1: BFF first (session captured once per scan), RSC fallback on any failure.
+  if (page === 1 && cid && !job.bffTried) {
+    job.bffTried = true;
+    try {
+      await zEnsureSession();
+      const items = await getDealsBff({ name: job.g.name, categoryId: cid }, { title: job.g.name, subCategoryId: scid });
+      if (items.length) { items.more = false; return items; }
+      zDiag = { reason: diagnoseEmpty({ status: /401/.test(zLastBffError) ? 401 : /429/.test(zLastBffError) ? 429 : 0, items: 0, hasSession: zSessionReady }), detail: zLastBffError };
+    } catch (e) { /* fall through to RSC */ }
+  }
+  // RSC path (also the pagination path): fetch the next queued sub-category page.
+  const url = page === 1 ? job.url : job.queue.shift();
+  if (!url) return Object.assign([], { more: false });
+  await sleep(250 + Math.random() * 350);
+  let r;
+  for (let a = 0; a < 3; a++) {
+    r = await W.fetch(url, { credentials: 'include', headers: { accept: 'text/html' } });
+    if (r.status !== 429 && r.status < 500) break;
+    await sleep(2000 * (a + 1));
+  }
+  if (!r.ok) { zDiag = { reason: diagnoseEmpty({ status: r.status, items: 0 }), detail: 'HTTP ' + r.status }; return Object.assign([], { more: job.queue.length > 0 }); }
+  const html = await r.text();
+  const text = rscText(html);
+  // Discover this category's sub-category pages (incl. the 5 staples) and queue them.
+  if (cid) {
     const re = /\/cn\/[a-z0-9-]+\/[a-z0-9-]+\/cid\/([0-9a-f-]{36})\/scid\/[0-9a-f-]{36}/g;
-    let m;
-    while ((m = re.exec(html))) if (m[1] === cid && !job.seen.has(m[0])) { job.seen.add(m[0]); job.queue.push(m[0]); }
-    const items = extract(rscText(html), job.g.name);
-    if (page === 1 && !items.length && !job.queue.length && html.indexOf('discountedSellingPrice') < 0) noLoc = true;
-    items.more = job.queue.length > 0;
-    return items;
+    let mm;
+    while ((mm = re.exec(html))) if (mm[1] === cid && !job.seen.has(mm[0])) { job.seen.add(mm[0]); job.queue.push(mm[0]); }
   }
+  const items = extractRscProducts(text, job.g.name);
+  if (page === 1 && !items.length && !job.queue.length && html.indexOf('discountedSellingPrice') < 0) { noLoc = true; zDiag = { reason: 'no-location', detail: 'no products embedded in page' }; }
+  else if (!items.length && !job.queue.length) zDiag = { reason: 'category-empty', detail: 'page loaded but no discounted products' };
+  items.more = job.queue.length > 0;
+  return items;
+}
+// ── end v2 Zepto fetch+parse ──
   const P = {
     key: 'zpt_v1', hostRe: /(^|\.)zepto(now)?\.com$/,
     defaults: { groups: ['z0', 'z2', 'z12'], depth: 5 },
@@ -146,7 +532,7 @@
 
   // ───────────────────────── State ─────────────────────────
   const S = { products: new Map(), scanning: false, done: 0, total: 0, errors: 0, ctl: { stop: false },
-    q: '', brand: '', cat: '', preset: '', pick: false, tgm: false, favOnly: false, newOnly: false, shown: 60, tab: 'best', panel: false, startedAt: 0 };
+    q: '', brand: '', cat: '', preset: '', pick: false, tgm: false, favOnly: false, newOnly: false, shown: 60, tab: 'best', panel: false, startedAt: 0, selfTest: null };
 
   // ───────────────────────── Scanner ─────────────────────────
   async function scan() {
@@ -165,7 +551,7 @@
           const fresh = ingest(items);
           scheduleRender();
           // Stop on the last page, or when a page adds nothing and does not promise more.
-          if (items.more === false || (!fresh && items.more !== true)) break;
+          if (items.more === false) break; // v2: a page of already-seen items must not end the scan
         }
       } catch (e) { if (!ctl.stop) S.errors++; }
       S.done++; scheduleRender();
@@ -496,7 +882,11 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
     return `<div><h4>${ic('scan', 15)}Scan</h4>
   ${P.locUI(store, esc)}
   <p class="note" style="margin-top:6px">Each scan asks which categories to check. Last time: ${store.groups.length} of ${GROUPS.length}.</p></div>
- ${S.scanning ? `<button class="btn stop" data-act="stop">${ic('stop')}Stop scan</button>` : `<button class="btn" data-act="scan">${ic('scan')}Choose & scan</button>`}`;
+ ${S.scanning ? `<button class="btn stop" data-act="stop">${ic('stop')}Stop scan</button>` : `<button class="btn" data-act="scan">${ic('scan')}Choose & scan</button>`}
+ <button class="btn ghost full" data-act="sorter" style="margin-top:8px">${ic('tag')}Sorter mode: sort this Zepto page</button>
+ <p class="note" style="margin-top:6px">Sorter reorders the products already on the Zepto page — highest discount, tap again for lowest price. Works on PC and mobile.</p>
+ <button class="btn ghost full" data-act="selftest" style="margin-top:8px">${ic('check')}Run self-test</button>
+ ${S.selfTest ? `<p class="note" style="margin-top:6px">Self-test: <b>${S.selfTest.pass ? 'PASS' : 'FAIL'}</b> · BFF ${S.selfTest.bff}/2 · RSC ${S.selfTest.rsc}/1 · sorter ${S.selfTest.sorter ? 'ok' : 'fail'}</p>` : `<p class="note" style="margin-top:6px">Self-test checks the parsers on sample data, in this tab.</p>`}`;
   }
   // Asked before every scan: which categories, and how deep.
   function pickerUI() {
@@ -550,7 +940,7 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
   <label class="sw" style="margin-top:16px"><input type="checkbox" data-in="stockOnly" ${store.stockOnly ? 'checked' : ''}> In stock only</label>
   <label class="sw" style="margin-top:10px"><input type="checkbox" data-in="favOnly" ${S.favOnly ? 'checked' : ''}> Saved only</label>
   <label class="sw" style="margin-top:10px"><input type="checkbox" data-in="newOnly" ${S.newOnly ? 'checked' : ''}> New or price dropped</label></div>
- <div><h4>${ic('download', 15)}Export</h4><div class="chips"><button class="chip" data-act="csv">${ic('download', 14)}CSV</button><button class="chip" data-act="copyall">${ic('copy', 14)}Copy top 20</button><button class="chip" data-act="unhide">${ic('eyeoff', 14)}Unhide (${store.hidden.length})</button></div>
+ <div><h4>${ic('download', 15)}Export</h4><div class="chips"><button class="chip" data-act="csv">${ic('download', 14)}CSV</button><button class="chip" data-act="json">${ic('download', 14)}JSON</button><button class="chip" data-act="copyall">${ic('copy', 14)}Copy top 20</button><button class="chip" data-act="unhide">${ic('eyeoff', 14)}Unhide (${store.hidden.length})</button></div>
   <p class="note" style="margin-top:14px"><kbd>/</kbd> search &nbsp;<kbd>S</kbd> scan &nbsp;<kbd>Esc</kbd> close</p></div>
 </aside>`;
   }
@@ -603,6 +993,12 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
  ${rows.map(([c, ps]) => `<section class="sec"><div class="sh"><h3>${esc(c)}</h3><button class="more" data-act="seeall" data-id="${esc(c)}">See all ${ps.length}${ic('ext', 13)}</button></div>
   <div class="hs">${ps.slice(0, 10).map(p => card(p, fav.has(p.id), store.list)).join('')}</div></section>`).join('')}`;
   }
+  function emptyStateHtml() {
+    if (S.scanning) return `<div class="empty"><span class="ei">${ic('scan', 26)}</span><b>Finding the best deals…</b>They appear here as each category comes in.</div>`;
+    if (S.products.size) return `<div class="empty"><span class="ei">${ic('tag', 26)}</span><b>No deals at this discount</b>Lower the minimum discount in the menu.</div>`;
+    const d = diagMessage(zDiag.reason || (P.noLocation() ? 'no-location' : 'category-empty'));
+    return `<div class="empty"><span class="ei">${ic('info', 26)}</span><b>${esc(d.title)}</b>${esc(d.hint)}<button class="btn ghost" data-act="selftest" style="margin-top:12px">Run self-test</button></div>`;
+  }
   function mainView() {
     if (OFFSITE) return `<main id="main">${offsiteCard()}</main>`;
     if (!S.products.size && !S.scanning) return `<main id="main">${checklist()}</main>`;
@@ -611,7 +1007,7 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
     const head = `<div class="tabs">${tabs.map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}</button>`).join('')}${S.scanning ? `<span class="live">${ic('scan', 14)}Scanning ${S.done}/${S.total}</span>` : ''}</div>`;
     let body;
     if (S.tab === 'best') {
-      body = bestView(list) || `<div class="empty"><span class="ei">${ic(S.scanning ? 'scan' : 'tag', 26)}</span><b>${S.scanning ? 'Finding the best deals…' : 'No deals at this discount'}</b>${S.scanning ? 'They appear here as each category comes in.' : 'Lower the minimum discount in the menu.'}</div>`;
+      body = bestView(list) || emptyStateHtml();
     } else {
       const cats = [...new Set([...S.products.values()].map(p => p.cat.split(' › ')[0]))];
       const fav = new Set(store.favs);
@@ -779,6 +1175,9 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
       case 'pclose': S.pick = false; render(); break;
       case 'stop': S.ctl.stop = true; toast('Stopping…'); break;
       case 'autoscroll': if (typeof autoScroll === 'function') autoScroll(); break;
+      case 'sorter': sortPageProducts(); break;
+      case 'selftest': { const r = runSelfTest(); S.selfTest = r; toast(r.pass ? `Self-test PASS · BFF ${r.bff}/2 · RSC ${r.rsc}/1 · sorter ok` : 'Self-test FAIL — parsers did not match the sample data'); render(); break; }
+      case 'json': { const a2 = document.createElement('a'); a2.href = URL.createObjectURL(new Blob([toJsonExport(filtered())], { type: 'application/json' })); a2.download = 'zepto-deals.json'; a2.click(); toast('JSON downloaded'); break; }
       case 'tgtest': tgTest(); break;
       case 'bell': case 'tgopen': sideOpen = false; S.pick = false; S.tgm = true; render(); break;
       case 'tgclose': S.tgm = false; render(); break;
@@ -854,6 +1253,8 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
     fabRoot.querySelector('.n').textContent = n ? String(n) : '';
   }
   const api = {
+    search(q) { return searchZepto(q).then(items => { ingest(items); scheduleRender(); return items; }); },
+    sortPage(mode) { return sortPageProducts(mode); },
     show() { fab.style.display = 'none'; host.style.display = 'block'; if (!OFFSITE && !S.scanning && !S.products.size && typeof captureUI !== 'function') setTimeout(openPicker, 300); prevOverflow = document.documentElement.style.overflow; document.documentElement.style.overflow = 'hidden'; render(); },
     hide() { host.style.display = 'none'; document.documentElement.style.overflow = prevOverflow; updateFab(); placeFab(); fab.style.display = 'block'; },
     toggle() { host.style.display === 'none' ? api.show() : api.hide(); }
