@@ -64,10 +64,31 @@ console.log('Items missing a card field:', bad.length);
 const cards = all.map(p => `<article class="card"><div class="im" style="background-image:url('${p.img}')"><span class="dc">${p.disc}% OFF</span></div><div class="inf"><a class="ti" href="${p.url}">${p.title}</a><div class="pr"><b>₹${p.price}</b><s>₹${p.mrp}</s></div></div></article>`);
 console.log('Cards rendered:', cards.length, 'of', all.length, 'parsed items');
 
+// 5. Highest-discount fixture (2026-11-09 fix): 8 BFF items at 85-100% off
+//    in the shapes that used to drop — string prices, "95%" / 0.95 discounts,
+//    max-only price, free item, out-of-stock clearance. All 8 must parse,
+//    and the 100%-off item must sort FIRST in the results tab.
+const hdBff = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-high-discount.json'), 'utf8'));
+const hdItems = extractWidgets(hdBff.pageLayout.widgets, 'Test', 'Atta', true);
+console.log('High-discount BFF parsed:', hdItems.length, '(expected 8)');
+const hdSorted = hdItems.slice().sort((a, b) => b.disc - a.disc || b.save - a.save);
+console.log('High-discount order:', hdSorted.map(p => p.id + ':' + p.disc).join(', '));
+const hdFirstOk = hdSorted.length === 8 && hdSorted[0].id === 'hd-100-free' && hdSorted[0].disc === 100 && hdSorted[1].disc === 95;
+console.log('Highest-discount item renders FIRST?', hdFirstOk);
+const hdRscHtml = fs.readFileSync(path.join(__dirname, 'fixtures', 'sample-high-discount-rsc.html'), 'utf8');
+const hdRsc = extractRscProducts(rscText(hdRscHtml), 'Test');
+console.log('High-discount RSC parsed:', hdRsc.length, '(expected 3):', hdRsc.map(p => p.id + ':' + p.disc).join(', '));
+const hdBad = hdItems.filter(p => p.id !== 'hd-100-free').filter(p => !p.id || !p.title || !(p.price > 0) || p.mrp < p.price || p.disc == null || !/^https:\/\/cdn\.zeptonow\.com\//.test(p.img) || !/^https:\/\/www\.zepto\.com\/pn\//.test(p.url));
+console.log('High-discount items missing a card field (excl. ₹0 free item):', hdBad.length);
+const hdCards = hdItems.map(p => `<article class="card"><div class="im" style="background-image:url('${p.img}')"><span class="dc">${p.disc}% OFF</span></div><div class="inf"><a class="ti" href="${p.url}">${p.title}</a><div class="pr"><b>₹${p.price}</b><s>₹${p.mrp}</s></div></div></article>`);
+console.log('High-discount cards rendered:', hdCards.length, 'of', hdItems.length, 'parsed items');
+const oosCard = zReadCard({ innerHTML: '<div><span>₹199</span><s>₹1,999</s><span>90% OFF</span><span>Out of stock</span></div>' });
+console.log('Sorter keeps out-of-stock 90%-off card?', oosCard && oosCard.d === 90 && oosCard.p === 199);
+
 const diagOk = diagCases.every(([got, want]) => got === want);
-if (bffItems.length === 6 && rscItems.length === 5 && card && card.d === 50 && card.p === 499 && bad.length === 0 && cards.length === all.length && selfTest.pass && diagOk && merged.length === 2) {
-  console.log('PASS: Zepto v2 parser renders 11/11 cards (BFF 6 + RSC 5) + self-test PASS + diagnostics 5/5');
+if (bffItems.length === 6 && rscItems.length === 5 && card && card.d === 50 && card.p === 499 && bad.length === 0 && cards.length === all.length && selfTest.pass && diagOk && merged.length === 2 && hdItems.length === 8 && hdFirstOk && hdRsc.length === 3 && hdBad.length === 0 && hdCards.length === hdItems.length && oosCard && oosCard.d === 90) {
+  console.log('PASS: Zepto v2 parser renders 11/11 cards (BFF 6 + RSC 5) + high-discount 8/8 BFF + 3/3 RSC, 100%-off first + self-test PASS + diagnostics 5/5');
 } else {
-  console.log('FAIL: expected BFF 6, RSC 5, sorter 50%/499, 0 bad items, 11 cards, self-test PASS, diagnostics 5/5');
+  console.log('FAIL: expected BFF 6, RSC 5, sorter 50%/499, 0 bad items, 11 cards, self-test PASS, diagnostics 5/5, high-discount BFF 8 (100% first) + RSC 3, sorter keeps OOS 90% card');
   process.exit(1);
 }

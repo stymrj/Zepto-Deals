@@ -2,6 +2,7 @@
 
 ## v2.0.0 — 2026-11-08
 - Fixed (2026-11-09): install button now reads “Zepto Deals” instead of the generic “PriceDrop Hunter”, so the dragged bookmark is named after this store instead of colliding with every other tool.
+- Fixed (2026-11-09): highest-discount items no longer vanish before any filter sees them — string prices ("₹1,999"), discounts as "95%" / 0.95, max-only listings (MRP + discount, no selling price), free (₹0) items, and RSC items with only `sellingPrice` or only MRP + discount now all parse (regression fixtures `fixtures/sample-high-discount.json` + `sample-high-discount-rsc.html`, 8/8 BFF + 3/3 RSC, 100%-off item sorts first); Sorter mode no longer deletes out-of-stock cards from the page it sorts. Same fix mirrored in `bot-v2/`.
 
 ### Zepto-Deals
 

@@ -204,21 +204,57 @@ function zeptoImageUrl(p) {
   if (!c.includes('/')) return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/cms/product_variant/' + c;
   return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/' + c;
 }
+// Prices arrive in paise as numbers; a few widgets send them as formatted
+// strings ("₹1,999"). Numbers are paise (/100); strings carry their own
+// unit, so a string with ₹ / commas / decimals is read as rupees, while a
+// bare-digit string behaves like the number form (paise). Reading a string
+// with /100 used to give NaN (₹) or a 100x-wrong price, and NaN failed the
+// `if (!sell)` check below — the item vanished before any filter saw it.
+function zeptoPaise(v) {
+  if (v == null) return 0;
+  if (typeof v === 'number') return isFinite(v) ? v / 100 : 0;
+  const s = String(v).trim();
+  if (!s) return 0;
+  if (/[₹,]/.test(s) || /\.\d/.test(s)) { const m = s.replace(/,/g, '').match(/\d+(\.\d+)?/); return m ? +m[0] : 0; }
+  const n = +s;
+  return isFinite(n) ? n / 100 : 0;
+}
+// Discount percent from the payload, in whatever shape it arrives: number 85,
+// string "85" / "85%", or fraction 0.85. Null when absent/unreadable. A
+// fraction used to survive as 0.85, which the 30% minimum filter then hid.
+function zeptoDiscPct(v) {
+  if (v == null) return null;
+  let n;
+  if (typeof v === 'number') n = v;
+  else { const m = String(v).match(/\d+(\.\d+)?/); if (!m) return null; n = +m[0]; }
+  if (!isFinite(n)) return null;
+  if (n > 0 && n < 1) n *= 100; // fraction form, e.g. 0.85 = 85%
+  return Math.round(n);
+}
 // One normaliser for both paths. Returns a Hunter-shaped product or null.
-// Prices arrive in paise; discount is read from the payload when present,
-// otherwise computed from MRP vs selling price. Never drops a product for a
-// missing image or brand — those render as an empty image / guessed brand.
+// Prices arrive in paise (or as formatted strings); discount is computed
+// from the prices the user actually sees, falling back to the payload's own
+// discount percent when MRP is missing or unusable. Never drops a product
+// for a missing image or brand — those render as an empty image / guessed brand.
 function normalizeZeptoProduct(it, cat) {
   const p = it.product || (it.productResponse && it.productResponse.product) || (it.item && it.item.product) || it;
   const v = it.productVariant || (it.productResponse && it.productResponse.productVariant) || (it.item && it.item.productVariant) || it;
   if (!p || !p.name) return null;
-  const sell = ((it.discountedSellingPrice != null ? it.discountedSellingPrice : it.sellingPrice) ?? (v.discountedSellingPrice != null ? v.discountedSellingPrice : v.sellingPrice) ?? 0) / 100;
-  let mrp = ((it.mrp != null ? it.mrp : v.mrp) ?? 0) / 100;
-  if (!sell) return null;
+  const rawSell = it.discountedSellingPrice != null ? it.discountedSellingPrice : it.sellingPrice != null ? it.sellingPrice : v.discountedSellingPrice != null ? v.discountedSellingPrice : v.sellingPrice;
+  const rawMrp = it.mrp != null ? it.mrp : it.maximumRetailPrice != null ? it.maximumRetailPrice : v.mrp != null ? v.mrp : v.maximumRetailPrice;
+  const hasSell = rawSell != null;
+  let sell = zeptoPaise(rawSell);
+  let mrp = zeptoPaise(rawMrp);
+  const discExplicit = zeptoDiscPct(it.discountPercent != null ? it.discountPercent : v.discountPercent);
+  // No selling price at all: derive it from MRP + the payload's own discount
+  // (a max-only listing still has a real discount). A ₹0 selling price with
+  // an MRP is a genuine free item, not a missing price.
+  if (!hasSell && mrp > 0 && discExplicit) sell = +(mrp * (1 - discExplicit / 100)).toFixed(2);
+  if (!sell && !(hasSell && mrp > 0)) return null;
   if (!(mrp >= sell)) mrp = sell;
   const oos = it.outOfStock === true || v.outOfStock === true || it.isOutOfStock === true || (v.inventory && v.inventory.quantity <= 0) || it.availableQuantity === 0 || v.quantity === 0 || v.isActive === false || it.isActive === false;
-  let disc = it.discountPercent != null ? it.discountPercent : v.discountPercent;
-  if (disc == null || isNaN(disc)) disc = mrp > sell ? Math.round((mrp - sell) / mrp * 100) : 0;
+  let disc = mrp > sell ? Math.round((mrp - sell) / mrp * 100) : 0;
+  if (!disc && discExplicit) disc = discExplicit;
   const imgPath = (v.images && v.images[0] && (v.images[0].path || v.images[0].name)) || (p.images && p.images[0] && (p.images[0].path || p.images[0].name)) || (it.images && it.images[0] && (it.images[0].path || it.images[0].url)) || (typeof it.image === 'string' ? it.image : (it.image && (it.image.path || it.image.url))) || '';
   const slug = (p.slug || slugify(p.name));
   return { id: String(it.id || v.id || p.id), title: p.name + (v.formattedPacksize ? ' · ' + v.formattedPacksize : ''), brand: String(p.brand || guessBrand(p.name)), price: sell, mrp, disc, save: mrp - sell, img: zeptoImageUrl(imgPath), url: v.id ? 'https://www.zepto.com/pn/' + slug + '/pvid/' + v.id : 'https://www.zepto.com/pn/' + slug, inStock: !oos, cat: cat + (it.primarySubcategoryName ? ' › ' + it.primarySubcategoryName : '') };
@@ -251,6 +287,12 @@ function extractRscProducts(text, cat) {
   const out = [], seen = new Set();
   const push = it => { const n = normalizeZeptoProduct(it, cat); if (n && !seen.has(n.id)) { seen.add(n.id); out.push(n); } };
   for (const it of objectsWith(text, 'discountedSellingPrice')) push(it);
+  // Some embedded items carry only a selling price, or only MRP + a discount
+  // percent — no discountedSellingPrice key, so the loop above never sees
+  // them and the deepest discounts go missing from RSC pages. Same
+  // normaliser, deduped by id.
+  for (const it of objectsWith(text, 'sellingPrice')) push(it);
+  for (const it of objectsWith(text, 'discountPercent')) push(it);
   for (const pl of zJsonObjects(text, '{"pageLayout"')) if (pl.pageLayout && Array.isArray(pl.pageLayout.widgets)) for (const n of extractWidgets(pl.pageLayout.widgets, cat, '', false)) if (!seen.has(n.id)) { seen.add(n.id); out.push(n); }
   for (const d of zJsonObjects(text, '{"productResponse"')) push(d);
   for (const d of zJsonObjects(text, '{"productVariant"')) push(d);
@@ -379,7 +421,11 @@ async function searchZepto(query) {
 let zSorterMode = null;
 function zReadCard(el) {
   const tx = (el.innerHTML || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toUpperCase();
-  if (/BANNER|NOTIFY|OUT OF STOCK/.test(tx)) return null;
+  // Out-of-stock cards still carry a real discount label — dropping them here
+  // deleted the deepest discounts from the sorted page outright (the sorter
+  // rebuilds the grid from what this returns). They sort by discount like
+  // any other card; only banners / notify-me placeholders are skipped.
+  if (/BANNER|NOTIFY/.test(tx)) return null;
   if (!tx.includes('₹')) return null;
   const nums = [];
   for (const m of tx.matchAll(/₹\s*([\d,.]+)/g)) { const v = parseFloat(m[1].replace(/[^\d.]/g, '')); const ctx = m.input.substring(m.index, m.index + 20).toUpperCase(); if (v > 5 && v < 30000 && !/MONTH|EMI/.test(ctx)) nums.push(v); }
@@ -440,16 +486,22 @@ function runSelfTest() {
   const bffFixture = { pageLayout: { widgets: [{ data: { items: [
     { id: 't-1', product: { id: 'tp-1', name: 'Test Atta', brand: 'Test' }, productVariant: { id: 't-1', formattedPacksize: '1 kg', images: [{ path: 'cms/product_variant/t-1.jpg' }] }, discountedSellingPrice: 4000, mrp: 5000, discountPercent: 20 },
     { id: 't-2', product: { id: 'tp-2', name: 'Test Oil', brand: 'Test' }, productVariant: { id: 't-2', formattedPacksize: '1 L', images: [{ path: 'cms/product_variant/t-2.jpg' }] }, discountedSellingPrice: 9000, mrp: 10000 },
-    { id: 't-3', product: { id: 'tp-3', name: 'Test Sugar', brand: 'Test' }, productVariant: { id: 't-3', formattedPacksize: '1 kg', images: [] }, discountedSellingPrice: 5000, mrp: 5000, discountPercent: 0 }
+    { id: 't-3', product: { id: 'tp-3', name: 'Test Sugar', brand: 'Test' }, productVariant: { id: 't-3', formattedPacksize: '1 kg', images: [] }, discountedSellingPrice: 5000, mrp: 5000, discountPercent: 0 },
+    // Highest-discount shapes (2026-11-09 fix): string prices, and a
+    // fraction discount with no MRP — both used to vanish before any filter.
+    { id: 't-5', product: { id: 'tp-5', name: 'Test HD Oil', brand: 'Test' }, productVariant: { id: 't-5', formattedPacksize: '1 L', images: [{ path: 'cms/product_variant/t-5.jpg' }] }, discountedSellingPrice: '₹199', mrp: '₹1,999', discountPercent: 90 },
+    { id: 't-6', product: { id: 'tp-6', name: 'Test HD Ghee', brand: 'Test' }, productVariant: { id: 't-6', formattedPacksize: '500 ml', images: [{ path: 'cms/product_variant/t-6.jpg' }] }, discountedSellingPrice: 500, discountPercent: 0.95 }
   ] } }] } };
-  const bff = extractWidgets(bffFixture.pageLayout.widgets, 'Test', 'Atta', true).length;
+  const bffItems = extractWidgets(bffFixture.pageLayout.widgets, 'Test', 'Atta', true);
+  const bff = bffItems.length, bffHi = bffItems.reduce((m, p) => Math.max(m, p.disc), 0);
   const inner = JSON.stringify({ id: 't-4', product: { id: 'tp-4', name: 'Test Rice', brand: 'Test' }, productVariant: { id: 't-4', formattedPacksize: '1 kg', images: [{ path: 'cms/product_variant/t-4.jpg' }] }, discountedSellingPrice: 7000, mrp: 10000 });
   const rscHtml = '<script>self.__next_f.push([1,' + JSON.stringify(inner) + '])</script>';
   const rsc = extractRscProducts(rscText(rscHtml), 'Test').length;
   const sc = zReadCard({ innerHTML: '<div><span>₹499</span><s>₹999</s><span>50% OFF</span></div>' });
-  const sorter = !!(sc && sc.d === 50 && sc.p === 499);
-  const pass = bff === 2 && rsc === 1 && sorter;
-  return { bff, rsc, sorter, pass };
+  const scOos = zReadCard({ innerHTML: '<div><span>₹199</span><s>₹1,999</s><span>90% OFF</span><span>Out of stock</span></div>' });
+  const sorter = !!(sc && sc.d === 50 && sc.p === 499 && scOos && scOos.d === 90);
+  const pass = bff === 4 && bffHi === 95 && rsc === 1 && sorter;
+  return { bff, bffHi, rsc, sorter, pass };
 }
 // JSON export of the currently filtered deals (CSV already exists in the UI).
 function toJsonExport(items) {
@@ -886,7 +938,7 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
  <button class="btn ghost full" data-act="sorter" style="margin-top:8px">${ic('tag')}Sorter mode: sort this Zepto page</button>
  <p class="note" style="margin-top:6px">Sorter reorders the products already on the Zepto page — highest discount, tap again for lowest price. Works on PC and mobile.</p>
  <button class="btn ghost full" data-act="selftest" style="margin-top:8px">${ic('check')}Run self-test</button>
- ${S.selfTest ? `<p class="note" style="margin-top:6px">Self-test: <b>${S.selfTest.pass ? 'PASS' : 'FAIL'}</b> · BFF ${S.selfTest.bff}/2 · RSC ${S.selfTest.rsc}/1 · sorter ${S.selfTest.sorter ? 'ok' : 'fail'}</p>` : `<p class="note" style="margin-top:6px">Self-test checks the parsers on sample data, in this tab.</p>`}`;
+ ${S.selfTest ? `<p class="note" style="margin-top:6px">Self-test: <b>${S.selfTest.pass ? 'PASS' : 'FAIL'}</b> · BFF ${S.selfTest.bff}/4 · RSC ${S.selfTest.rsc}/1 · sorter ${S.selfTest.sorter ? 'ok' : 'fail'}</p>` : `<p class="note" style="margin-top:6px">Self-test checks the parsers on sample data, in this tab.</p>`}`;
   }
   // Asked before every scan: which categories, and how deep.
   function pickerUI() {
@@ -1176,7 +1228,7 @@ kbd{border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:11px;fo
       case 'stop': S.ctl.stop = true; toast('Stopping…'); break;
       case 'autoscroll': if (typeof autoScroll === 'function') autoScroll(); break;
       case 'sorter': sortPageProducts(); break;
-      case 'selftest': { const r = runSelfTest(); S.selfTest = r; toast(r.pass ? `Self-test PASS · BFF ${r.bff}/2 · RSC ${r.rsc}/1 · sorter ok` : 'Self-test FAIL — parsers did not match the sample data'); render(); break; }
+      case 'selftest': { const r = runSelfTest(); S.selfTest = r; toast(r.pass ? `Self-test PASS · BFF ${r.bff}/4 · RSC ${r.rsc}/1 · sorter ok` : 'Self-test FAIL — parsers did not match the sample data'); render(); break; }
       case 'json': { const a2 = document.createElement('a'); a2.href = URL.createObjectURL(new Blob([toJsonExport(filtered())], { type: 'application/json' })); a2.download = 'zepto-deals.json'; a2.click(); toast('JSON downloaded'); break; }
       case 'tgtest': tgTest(); break;
       case 'bell': case 'tgopen': sideOpen = false; S.pick = false; S.tgm = true; render(); break;

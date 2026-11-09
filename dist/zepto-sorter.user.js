@@ -35,7 +35,11 @@
   // --- reading a card: label first, price pair second, tag the card ---
   function readCard(el) {
     const tx = (el.innerHTML || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toUpperCase();
-    if (/BANNER|NOTIFY|OUT OF STOCK/.test(tx) || !tx.includes('₹')) return null;
+    // Out-of-stock cards still carry a real discount label — dropping them
+    // here deleted the deepest discounts from the sorted page outright (the
+    // sorter rebuilds the grid from what this returns). They sort by discount
+    // like any other card; only banners / notify-me placeholders are skipped.
+    if (/BANNER|NOTIFY/.test(tx) || !tx.includes('₹')) return null;
     const nums = [];
     for (const m of tx.matchAll(/₹\s*([\d,.]+)/g)) {
       const v = parseFloat(m[1].replace(/[^\d.]/g, ''));

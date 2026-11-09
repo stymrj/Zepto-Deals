@@ -49,17 +49,49 @@ function imageUrl(p) {
   if (!c.includes('/')) return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/cms/product_variant/' + c;
   return 'https://cdn.zeptonow.com/production/tr:w-360,f-auto,q-70/' + c;
 }
+// Prices arrive in paise as numbers; a few widgets send them as formatted
+// strings ("₹1,999"). Numbers are paise (/100); strings carry their own unit,
+// so a string with ₹ / commas / decimals is read as rupees, while a bare-digit
+// string behaves like the number form (paise). Same fix as the bookmarklet:
+// reading a string with /100 gave NaN (₹) and dropped the item outright.
+function zeptoPaise(v) {
+  if (v == null) return 0;
+  if (typeof v === 'number') return isFinite(v) ? v / 100 : 0;
+  const s = String(v).trim();
+  if (!s) return 0;
+  if (/[₹,]/.test(s) || /\.\d/.test(s)) { const m = s.replace(/,/g, '').match(/\d+(\.\d+)?/); return m ? +m[0] : 0; }
+  const n = +s;
+  return isFinite(n) ? n / 100 : 0;
+}
+// Discount percent from the payload, in whatever shape it arrives: number 85,
+// string "85" / "85%", or fraction 0.85. Null when absent/unreadable.
+function zeptoDiscPct(v) {
+  if (v == null) return null;
+  let n;
+  if (typeof v === 'number') n = v;
+  else { const m = String(v).match(/\d+(\.\d+)?/); if (!m) return null; n = +m[0]; }
+  if (!isFinite(n)) return null;
+  if (n > 0 && n < 1) n *= 100; // fraction form, e.g. 0.85 = 85%
+  return Math.round(n);
+}
 function normalize(it, cat, sub) {
   const p = it.product || (it.productResponse && it.productResponse.product) || it;
   const v = it.productVariant || (it.productResponse && it.productResponse.productVariant) || it;
   if (!p || !p.name) return null;
-  const sell = ((it.discountedSellingPrice != null ? it.discountedSellingPrice : it.sellingPrice) ?? (v.discountedSellingPrice != null ? v.discountedSellingPrice : v.sellingPrice) ?? 0) / 100;
-  let mrp = ((it.mrp != null ? it.mrp : v.mrp) ?? 0) / 100;
-  if (!sell) return null;
+  const rawSell = it.discountedSellingPrice != null ? it.discountedSellingPrice : it.sellingPrice != null ? it.sellingPrice : v.discountedSellingPrice != null ? v.discountedSellingPrice : v.sellingPrice;
+  const rawMrp = it.mrp != null ? it.mrp : it.maximumRetailPrice != null ? it.maximumRetailPrice : v.mrp != null ? v.mrp : v.maximumRetailPrice;
+  const hasSell = rawSell != null;
+  let sell = zeptoPaise(rawSell);
+  let mrp = zeptoPaise(rawMrp);
+  const discExplicit = zeptoDiscPct(it.discountPercent != null ? it.discountPercent : v.discountPercent);
+  // No selling price at all: derive it from MRP + the payload's own discount.
+  // A ₹0 selling price with an MRP is a genuine free item, not a missing price.
+  if (!hasSell && mrp > 0 && discExplicit) sell = +(mrp * (1 - discExplicit / 100)).toFixed(2);
+  if (!sell && !(hasSell && mrp > 0)) return null;
   if (!(mrp >= sell)) mrp = sell;
   const oos = it.outOfStock === true || v.outOfStock === true || it.availableQuantity === 0 || v.quantity === 0;
-  let disc = it.discountPercent != null ? it.discountPercent : v.discountPercent;
-  if (disc == null || isNaN(disc)) disc = mrp > sell ? Math.round((mrp - sell) / mrp * 100) : 0;
+  let disc = mrp > sell ? Math.round((mrp - sell) / mrp * 100) : 0;
+  if (!disc && discExplicit) disc = discExplicit;
   const img = (v.images && v.images[0] && (v.images[0].path || v.images[0].name)) || (p.images && p.images[0] && (p.images[0].path || p.images[0].name)) || '';
   const slug = p.slug || slugify(p.name);
   return { id: String(it.id || v.id || p.id), title: p.name + (v.formattedPacksize ? ' · ' + v.formattedPacksize : ''), brand: String(p.brand || ''), price: sell, mrp, disc, save: +(mrp - sell).toFixed(2), img: imageUrl(img), url: v.id ? `${SITE}/pn/${slug}/pvid/${v.id}` : `${SITE}/pn/${slug}`, inStock: !oos, cat: cat + (sub ? ' › ' + sub : '') };

@@ -46,6 +46,13 @@ bookmarklet or userscript. Nothing is uploaded and there is no account.
 - **Bot with a memory.** `bot-v2/` watches Atta, Oil, Ghee, Dals and Rice
   plus Blockbuster Deals, dedupes, and keeps a price history so alerts say
   "Lowest ever" / "Price drop ₹X → ₹Y" (see `bot-v2/README.md`).
+- **Highest discounts no longer vanish (2026-11-09).** The parser used to
+  drop the deepest-discount items before any filter saw them: prices sent as
+  formatted strings ("₹1,999"), discounts sent as "95%" or 0.95, listings
+  with only an MRP + discount, free (₹0) items, and RSC items with no
+  `discountedSellingPrice` key. All of those now parse (see
+  `fixtures/sample-high-discount.json`), and Sorter mode no longer deletes
+  out-of-stock cards from the page it sorts.
 - Hunter-only strengths the baseline never had: price history + lowest-ever,
   saved-item tracking with sparklines, unit-price sort, CSV/JSON export.
 - **Bookmark name fixed (2026-11-09):** the install button now reads **Zepto Deals** instead of the generic “PriceDrop Hunter”, so the bookmark you drag to your bookmarks bar is named after this store.
