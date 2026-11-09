@@ -1,0 +1,161 @@
+{
+  "pageLayout": {
+    "endOfPage": true,
+    "widgets": [
+      {
+        "data": {
+          "items": [
+            {
+              "id": "v-atta-1",
+              "product": {
+                "id": "p-v-atta-1",
+                "name": "Aashirvaad Shudh Chakki Atta",
+                "brand": "Aashirvaad"
+              },
+              "productVariant": {
+                "id": "v-atta-1",
+                "formattedPacksize": "10 kg",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-atta-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 41900,
+              "mrp": 54900,
+              "discountPercent": 24
+            },
+            {
+              "id": "v-oil-1",
+              "product": {
+                "id": "p-v-oil-1",
+                "name": "Fortune Sunflower Oil",
+                "brand": "Fortune"
+              },
+              "productVariant": {
+                "id": "v-oil-1",
+                "formattedPacksize": "1 L",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-oil-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 12900,
+              "mrp": 20000,
+              "discountPercent": 36
+            },
+            {
+              "id": "v-ghee-1",
+              "product": {
+                "id": "p-v-ghee-1",
+                "name": "Amul Cow Ghee",
+                "brand": "Amul"
+              },
+              "productVariant": {
+                "id": "v-ghee-1",
+                "formattedPacksize": "1 L",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-ghee-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 58500,
+              "mrp": 65000,
+              "discountPercent": 10
+            },
+            {
+              "id": "v-dal-1",
+              "product": {
+                "id": "p-v-dal-1",
+                "name": "Tata Sampann Toor Dal",
+                "brand": "Tata Sampann"
+              },
+              "productVariant": {
+                "id": "v-dal-1",
+                "formattedPacksize": "1 kg",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-dal-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 13500,
+              "mrp": 18000,
+              "discountPercent": 25
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "products": [
+            {
+              "id": "v-rice-1",
+              "product": {
+                "id": "p-v-rice-1",
+                "name": "India Gate Basmati Rice",
+                "brand": "India Gate"
+              },
+              "productVariant": {
+                "id": "v-rice-1",
+                "formattedPacksize": "5 kg",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-rice-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 62900,
+              "mrp": 89900,
+              "discountPercent": 30
+            },
+            {
+              "id": "v-sugar-1",
+              "product": {
+                "id": "p-v-sugar-1",
+                "name": "Sugar",
+                "brand": "Generic"
+              },
+              "productVariant": {
+                "id": "v-sugar-1",
+                "formattedPacksize": "1 kg",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-sugar-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 5000,
+              "mrp": 5000,
+              "discountPercent": 0
+            },
+            {
+              "id": "v-maggi-1",
+              "product": {
+                "id": "p-v-maggi-1",
+                "name": "Maggi 2-Minute Noodles",
+                "brand": "Maggi"
+              },
+              "productVariant": {
+                "id": "v-maggi-1",
+                "formattedPacksize": "12 pack",
+                "images": [
+                  {
+                    "path": "cms/product_variant/v-maggi-1.jpg"
+                  }
+                ]
+              },
+              "discountedSellingPrice": 12000,
+              "mrp": 15600,
+              "discountPercent": 23,
+              "outOfStock": true
+            }
+          ]
+        },
+        "widgets": []
+      }
+    ]
+  }
+}

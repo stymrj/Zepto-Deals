@@ -47,6 +47,20 @@ const launcher = `
 })();
 `;
 fs.writeFileSync(path.join(__dirname, 'dist/zepto-deals.user.js'), header + code + '\n' + launcher);
+// Standalone sorter (PC dock + mobile FAB): ships as-is plus a userscript build.
+const sorter = fs.readFileSync(path.join(__dirname, 'src/sorter.js'), 'utf8');
+fs.writeFileSync(path.join(__dirname, 'dist/sorter.js'), sorter);
+const sorterHeader = `// ==UserScript==
+// @name         PriceDrop Hunter — Zepto Sorter
+// @namespace    zepto-sorter
+// @version      2.0.0
+// @description  Sort the products already on a Zepto page by discount or price.
+// @match        https://www.zepto.com/*
+// @run-at       document-idle
+// @grant        none
+// ==/UserScript==
+`;
+fs.writeFileSync(path.join(__dirname, 'dist/zepto-sorter.user.js'), sorterHeader + sorter);
 const attr = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 const tpl = fs.readFileSync(path.join(__dirname, 'src/index.tpl.html'), 'utf8');
 // Function replacements: a string would treat `$&` / `$'` inside the code as patterns.
