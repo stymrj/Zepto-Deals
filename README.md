@@ -68,7 +68,7 @@ bookmarklet or userscript. Nothing is uploaded and there is no account.
 **Bookmarklet (mobile).** On the install page, tap **Copy mobile loader**.
 It is a bookmark of about 380 characters that loads the latest version from
 GitHub Pages. Create a bookmark named **Zepto Deals**, paste it as the address, and run it from
-the address bar on zepto.com. The full bookmarklet (about 73 KB, no network
+the address bar on zepto.com. The full bookmarklet (about 74 KB, no network
 needed) is in `dist/bookmarklet.txt`.
 
 **Userscript.** Install `dist/zepto-deals.user.js` in Tampermonkey or
@@ -104,10 +104,44 @@ only in your browser.
 
 ## Bot setup (scheduled Telegram alerts)
 
-`bot-v2/` is a separate Node bot (no dependencies, Node 18+). It needs your
-own Zepto session cookie — see `bot-v2/README.md` and
-`bot-v2/.env.example`. Without a session cookie the BFF calls return 401
-and nothing is posted. Run it on cron for scheduled runs.
+`bot-v2/` is a separate Node bot (no dependencies, Node 18+) that also runs
+on its own, without a browser, on GitHub Actions — see
+`.github/workflows/telegram-bot.yml`. Every 30 minutes (08:31–00:01 IST) it
+scans the staples sub-categories plus Blockbuster Deals, compares with the
+previous run, and sends new deals to Telegram. It needs your own Zepto
+session cookie — see `bot-v2/README.md` and `bot-v2/.env.example`.
+
+1. Fork [github.com/stymrj/Zepto-Deals](https://github.com/stymrj/Zepto-Deals).
+2. Create a bot with `@BotFather` (`TELEGRAM_BOT_TOKEN`) and get your chat
+   ID from `@userinfobot` (`TELEGRAM_CHAT_ID`).
+3. On zepto.com while logged in, copy the Cookie header from DevTools →
+   Network (`ZEPTO_COOKIE` — must include `store_id` and `XSRF-TOKEN`) and
+   copy the `XSRF-TOKEN` value out separately (`ZEPTO_XSRF_TOKEN`).
+4. In your fork, add those four as **Secrets** (Settings → Secrets and
+   variables → Actions), and set the **Variable** `BOT_ENABLED` = `true`.
+5. In **Actions**, enable workflows, run **Telegram deal alerts** with
+   **Print the messages instead of sending them** ticked to preview, then
+   run it again for real.
+
+Optional variables: `MIN_DISCOUNT` (default 50), `ZEPTO_STORE_ID`,
+`ZEPTO_DEVICE_ID`, `ZEPTO_LAT` / `ZEPTO_LNG` (default Bengaluru 12.9716,
+77.5946 — set these to your delivery location, or the bot scans for the
+wrong city).
+
+Local run: `cp bot-v2/.env.example bot-v2/.env`, then
+`node bot-v2/src/bot.js --dry-run` (prints, sends nothing, saves no state)
+or `node bot-v2/src/bot.js`. Node 18+, no `npm install` needed.
+
+Dedupe (`bot-v2/data/posted.json`) and price history
+(`bot-v2/data/prices.json`) persist between scheduled runs through the
+Actions cache — if the cache is ever lost, the bot may re-post deals it
+already sent. A dry run never writes either file.
+
+A session cookie works like your password for that site. Keep it only in
+GitHub **Secrets** or your local `.env` (already in `.gitignore`), never in
+a commit or an issue. If one ever leaks, log out of all devices on Zepto to
+cancel it. Cookies expire; when the bot reports that Zepto refused the
+session (401), copy a fresh one.
 
 ## Troubleshooting
 
@@ -121,6 +155,19 @@ and nothing is posted. Run it on cron for scheduled runs.
 - **Still stuck?** Press **Run self-test** in the sidebar: it checks the
   parsers on sample data. If it passes, the problem is the live session or
   location, not the code.
+- **Scheduled bot posts nothing / 401 in the Actions log.** The session
+  cookie expired — copy a fresh `ZEPTO_COOKIE` (and `ZEPTO_XSRF_TOKEN`)
+  into Secrets. The run now fails loudly instead of staying green.
+- **Scheduled runs never start.** Set the repository variable
+  `BOT_ENABLED` to `true` (Settings → Secrets and variables → Actions →
+  Variables). Manual workflow runs always work, even with the variable off.
+- **Bot run fails "no session cookie".** The `ZEPTO_COOKIE` secret is
+  missing — add it (step 3 above).
+- **Bot shows another city's deals.** The bot defaults to Bengaluru
+  (12.9716, 77.5946) — set the `ZEPTO_LAT` / `ZEPTO_LNG` variables to your
+  delivery location.
+- **403/429 in the Actions log.** Zepto rate-limited the GitHub IP — wait
+  for the next run. The bookmarklet in your own tab is the reliable path.
 - Zepto can change its pages/APIs at any time; the RSC fallback and the
   loose widget parser are there to survive small changes.
 
@@ -128,7 +175,9 @@ and nothing is posted. Run it on cron for scheduled runs.
 
 ```bash
 node test-results-tab.js            # parser regression: 11 sample products must render as 11 cards
+node test-bookmark-name.js          # install button reads "Zepto Deals" in template + built page
 node bot-v2/test-price-history.js   # bot price-history: drops + lowest-ever
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/telegram-bot.yml'))"   # workflow parses
 node build.js                       # rebuilds dist/ and index.html
 ```
 
@@ -146,6 +195,7 @@ src/sorter.js        standalone sorter (PC dock + mobile FAB)
 src/index.tpl.html   install page template
 build.js             builds dist/ and index.html
 bot-v2/              Telegram bot (BFF client, staples config, price history)
+.github/workflows/   telegram-bot.yml (every 30 minutes, 08:31–00:01 IST)
 test-results-tab.js  parser regression test
 fixtures/            sample BFF + RSC payloads
 ```
