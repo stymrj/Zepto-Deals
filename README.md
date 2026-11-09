@@ -48,6 +48,7 @@ bookmarklet or userscript. Nothing is uploaded and there is no account.
   "Lowest ever" / "Price drop ₹X → ₹Y" (see `bot-v2/README.md`).
 - Hunter-only strengths the baseline never had: price history + lowest-ever,
   saved-item tracking with sparklines, unit-price sort, CSV/JSON export.
+- **Bookmark name fixed (2026-11-09):** the install button now reads **Zepto Deals** instead of the generic “PriceDrop Hunter”, so the bookmark you drag to your bookmarks bar is named after this store.
 
 ## Install
 
@@ -55,12 +56,11 @@ bookmarklet or userscript. Nothing is uploaded and there is no account.
 
 [Watch the walkthrough video (MP4)](https://stymrj.github.io/PriceDrop-Hunter/media/install-demo.mp4)
 
-**Bookmarklet (desktop).** Run `node build.js`, open `index.html`, and drag
-the button to your bookmarks bar. Open zepto.com and click the bookmark.
+**Bookmarklet (desktop).** Run `node build.js`, open `index.html`, and drag the **Zepto Deals** button to your bookmarks bar. Open zepto.com and click the bookmark.
 
 **Bookmarklet (mobile).** On the install page, tap **Copy mobile loader**.
 It is a bookmark of about 380 characters that loads the latest version from
-GitHub Pages. Create a bookmark, paste it as the address, and run it from
+GitHub Pages. Create a bookmark named **Zepto Deals**, paste it as the address, and run it from
 the address bar on zepto.com. The full bookmarklet (about 73 KB, no network
 needed) is in `dist/bookmarklet.txt`.
 
