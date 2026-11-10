@@ -1,0 +1,74 @@
+# Telegram deal alerts — Zepto staples + Blockbuster Deals (bot-v2/).
+# Runs every 30 minutes, 08:31-00:01 IST (03:01-18:31 UTC). Scheduled runs
+# start only after the repository variable BOT_ENABLED is set to "true".
+# Secrets (Settings -> Secrets and variables -> Actions -> Secrets):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID — your Telegram bot (see README).
+#   ZEPTO_COOKIE — your own logged-in Zepto session cookie (must include
+#     store_id + XSRF-TOKEN). ZEPTO_XSRF_TOKEN — the XSRF token from the
+#     same session, copied out separately. Without the cookie the BFF calls
+#     return 401 and the run posts nothing (and now fails loudly).
+# Variables (same page -> Variables), all optional — the bot has defaults:
+#   MIN_DISCOUNT (default 50), ZEPTO_STORE_ID, ZEPTO_DEVICE_ID,
+#   ZEPTO_LAT / ZEPTO_LNG (default Bengaluru 12.9716, 77.5946).
+# Dedupe (bot-v2/data/posted.json) + price history (bot-v2/data/prices.json)
+# persist between runs through the Actions cache below. Dry-run: Actions ->
+# Run workflow -> tick "Print the messages instead of sending them".
+name: Telegram deal alerts
+
+on:
+  schedule:
+    - cron: '1,31 3-18 * * *'   # every 30 minutes, 08:31 to 00:01 IST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the messages instead of sending them
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    # Scheduled runs start only after you set the repository variable BOT_ENABLED to true.
+    if: github.event_name == 'workflow_dispatch' || vars.BOT_ENABLED == 'true'
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      ZEPTO_COOKIE: ${{ secrets.ZEPTO_COOKIE }}
+      ZEPTO_XSRF_TOKEN: ${{ secrets.ZEPTO_XSRF_TOKEN }}
+      ZEPTO_STORE_ID: ${{ vars.ZEPTO_STORE_ID }}
+      ZEPTO_DEVICE_ID: ${{ vars.ZEPTO_DEVICE_ID }}
+      ZEPTO_LAT: ${{ vars.ZEPTO_LAT }}
+      ZEPTO_LNG: ${{ vars.ZEPTO_LNG }}
+      MIN_DISCOUNT: ${{ vars.MIN_DISCOUNT }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Restore last run
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            bot-v2/data/posted.json
+            bot-v2/data/prices.json
+          key: bot-state-${{ github.run_id }}
+          restore-keys: bot-state-
+      - name: Scan and alert
+        run: node bot-v2/src/bot.js
+      - name: Remember this run
+        if: always() && hashFiles('bot-v2/data/posted.json', 'bot-v2/data/prices.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            bot-v2/data/posted.json
+            bot-v2/data/prices.json
+          key: bot-state-${{ github.run_id }}-${{ github.run_attempt }}

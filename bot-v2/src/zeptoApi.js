@@ -1,9 +1,11 @@
 // Zepto BFF client for the Telegram bot (Node 18+, no dependencies).
 // Same API shape as the bookmarklet: POST bff-gateway.zepto.com/lms/api/v2/get_page
 // with signed headers (SHA-256 over sorted body|deviceId|method|requestId|
-// secret|url, secret = XSRF token, x-without-bearer when unauthenticated),
-// plus a Next.js RSC fallback that needs no auth. Adapted from the
-// MIT-licensed reference implementation; see LICENSE.
+// secret|url, secret = XSRF token, x-without-bearer when unauthenticated).
+// Deals come only from the BFF path. The Next.js RSC fetch in this file is
+// used solely to discover sub-category ids (discoverSubId) — it is not a
+// deals fallback; the bookmarklet's RSC fallback is browser-only. Adapted
+// from the MIT-licensed reference implementation; see LICENSE.
 // Needs a real user session: set ZEPTO_COOKIE (with store_id + XSRF-TOKEN)
 // and ZEPTO_XSRF_TOKEN from your own logged-in Zepto tab. Without them the
 // BFF calls return 401 and only the RSC fallback is attempted.
