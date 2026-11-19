@@ -14,6 +14,7 @@ const { getDeals, discoverSubId } = require('./zeptoApi');
 const { record } = require('./priceHistory');
 const config = require('../config.json');
 const DRY = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
+const JSON_MODE = process.argv.includes('--json');
 const ROOT = path.join(__dirname, '..');
 const DATA = path.join(ROOT, 'data', 'posted.json');
 const PRICES = path.join(ROOT, 'data', 'prices.json');
@@ -42,16 +43,27 @@ async function main() {
     console.log(`[bot] ${sub.name}: subCategoryId ${ids.subCategoryId === parent.subCategoryId ? '(parent fallback)' : ids.subCategoryId}`);
     let items = [];
     try { items = await getDeals(ids.categoryId, ids.subCategoryId, parent.name, sub.name, 3); } catch (e) { console.error(`[bot] ${sub.name} failed:`, e.message); }
-    for (const p of items) if (p.disc >= Math.max(minDisc, sub.minDiscount || 0) && p.inStock && !posted[p.id]) found.push(p);
+    for (const p of items) if (p.disc >= Math.max(minDisc, sub.minDiscount || 0) && p.inStock && (JSON_MODE || !posted[p.id])) found.push(p);
     await sleep(800 + Math.random() * 800);
   }
   // Blockbuster Deals hub.
   try {
     const bb = config.blockbuster;
     const items = await getDeals(bb.categoryId, bb.subCategoryId, 'Blockbuster Deals', 'Top Picks', 3);
-    for (const p of items) if (p.disc >= minDisc && p.inStock && !posted[p.id]) found.push(p);
+    for (const p of items) if (p.disc >= minDisc && p.inStock && (JSON_MODE || !posted[p.id])) found.push(p);
   } catch (e) { console.error('[bot] Blockbuster failed:', e.message); }
   found.sort((a, b) => b.disc - a.disc || b.save - a.save);
+  // --json feed mode: snapshot for the subscriber-bot digest. No dedupe
+  // filter (bypassed above), no price-history/dedupe writes, no Telegram.
+  // The JSON object is always the LAST stdout line; the workflow extracts
+  // it with `tail -n 1` (the [bot] log lines stay on stdout).
+  if (JSON_MODE) {
+    const deals = found.filter(p => p.disc >= minDisc && p.inStock).slice(0, 20)
+      .map(p => ({ title: p.title, price: p.price, mrp: p.mrp, disc: Math.round(p.disc), url: p.url || '', cat: p.cat || '' }));
+    console.log(JSON.stringify({ store: 'Zepto', generatedAt: new Date().toISOString(), deals }));
+    return;
+  }
+
   const prices = loadPrices();
   for (const item of found) { const r = record(prices, item.id, item.price); item.prevPrice = r.previous; item.isDrop = r.isDrop; item.lowestEver = r.isLowestEver; }
   if (DRY) console.log('[dry-run] price history not saved'); else savePrices(prices);
