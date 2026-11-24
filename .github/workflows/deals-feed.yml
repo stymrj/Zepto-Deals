@@ -33,6 +33,7 @@ jobs:
     steps:
       - name: Check required secrets
         id: check
+        shell: bash
         env:
           ZEPTO_COOKIE: ${{ secrets.ZEPTO_COOKIE }}
         run: |
